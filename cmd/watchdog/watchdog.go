@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 )
@@ -25,7 +26,6 @@ func main() {
 					return
 				}
 				if event.Op&fsnotify.Write == fsnotify.Write {
-					continue
 					// 读取文件内容并匹配字符串
 					content, err := readFileContent(event.Name)
 					if err != nil {
@@ -41,6 +41,7 @@ func main() {
 						}
 					}
 				}
+				time.Sleep(500 * time.Millisecond)
 			case err, ok := <-watcher.Errors:
 				if !ok {
 					return
