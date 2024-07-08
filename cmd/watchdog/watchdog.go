@@ -1,15 +1,26 @@
 package main
 
 import (
+	"flag"
+	"io"
 	"log"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/hpcloud/tail"
+	"github.com/hpcloud/tail/ratelimiter"
+)
+
+var logfilePath = flag.String("p", "/temp", "log files path")
+
+var (
+	tailingFiles = []string{}
 )
 
 func main() {
+	flag.Parse()
+
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		log.Fatal(err)
@@ -25,33 +36,37 @@ func main() {
 				if !ok {
 					return
 				}
+
 				if event.Op&fsnotify.Write == fsnotify.Write {
-					// 读取文件内容并匹配字符串
-					content, err := readFileContent(event.Name)
-					if err != nil {
-						log.Println("读取文件内容错误:", err)
-						continue
+					included := false
+					for _, file := range tailingFiles {
+						if file == event.Name {
+							included = true
+							break
+						}
 					}
-					// split by \n
-					lines := strings.Split(content, "\n")
-					for _, line := range lines {
-						if strings.Contains(line, "ERROR") {
-							log.Println("-----------------")
-							log.Println(line)
+					if !included {
+						log.Println("New File" + event.Name + " is created.")
+						tailingFiles = append(tailingFiles, event.Name)
+						err := tailLog(event.Name)
+						if err != nil {
+							log.Println("读取文件内容错误:", err)
+							continue
 						}
 					}
 				}
-				time.Sleep(500 * time.Millisecond)
 			case err, ok := <-watcher.Errors:
 				if !ok {
 					return
 				}
-				log.Println("错误:", err)
+				log.Println("WatchLogs Error:", err)
 			}
+
+			time.Sleep(1000 * time.Millisecond)
 		}
 	}()
 
-	watchPath := "./logs/logfile.log" // 替换为你要监听的日志文件路径
+	watchPath := *logfilePath // 替换为你要监听的日志文件路径
 	err = watcher.Add(watchPath)
 	if err != nil {
 		log.Fatal(err)
@@ -60,12 +75,36 @@ func main() {
 	<-done
 }
 
-func readFileContent(filename string) (string, error) {
-	// 这里假设每次写入都是追加操作，只读取文件末尾的新内容
-	// 实际实现可能需要根据具体情况调整
-	data, err := os.ReadFile(filename)
-	if err != nil {
-		return "", err
+func tailLog(filename string) error {
+	log.Println(filename)
+
+	seek := &tail.SeekInfo{
+		Offset: 0,
+		Whence: io.SeekEnd,
 	}
-	return string(data), nil
+	config := tail.Config{
+		Location:  seek,
+		Follow:    true,
+		Poll:      true,
+		ReOpen:    true,
+		MustExist: true,
+		RateLimiter: ratelimiter.NewLeakyBucket(
+			4*1000, // 1000 characters per Millisecond
+			time.Millisecond,
+		),
+	}
+	t, err := tail.TailFile(filename, config)
+
+	if err != nil {
+		return err
+	}
+
+	for lines := range t.Lines {
+		// TODO: logic here
+		if strings.Contains(lines.Text, "ERROR") {
+			log.Println(lines.Text)
+		}
+	}
+
+	return nil
 }
